@@ -1,21 +1,19 @@
-import { Wallet as EthersWallet } from 'ethers';
 import { TronWeb } from 'tronweb';
-import { createPublicClient, createWalletClient, http } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import erc20Abi from '../abis/erc20.json';
+import { createPublicClient, http, erc20Abi } from 'viem';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { GeneratedWallet } from '../../services/wallets/wallet.types';
 import { Wallet } from '../../services/wallets/wallet.model';
-import { Network } from '../types';
 import { networkConfig } from '../../config/network';
 import { supportedTokensConfig } from '../../config/tokens';
 
 export function generateEthereumWallet(): GeneratedWallet {
-  const wallet = EthersWallet.createRandom();
+  const privateKey = generatePrivateKey();
+  const account = privateKeyToAccount(privateKey);
 
   return {
     network: 'ethereum',
-    address: wallet.address,
-    privateKey: wallet.privateKey,
+    address: account.address,
+    privateKey,
   };
 }
 

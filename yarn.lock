@@ -1076,7 +1076,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ethers@npm:6.17.0, ethers@npm:^6.17.0":
+"ethers@npm:6.17.0":
   version: 6.17.0
   resolution: "ethers@npm:6.17.0"
   dependencies:
@@ -1429,7 +1429,6 @@ __metadata:
     "@inquirer/prompts": "npm:^8.7.3"
     "@types/node": "npm:^26.6.5"
     dotenv: "npm:^18.0.7"
-    ethers: "npm:^6.17.0"
     mongoose: "npm:^9.11.1"
     tronweb: "npm:^6.5.1"
     tsx: "npm:^4.23.15"

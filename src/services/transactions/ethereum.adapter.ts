@@ -1,52 +1,83 @@
+import {
+  isAddress,
+  createPublicClient,
+  createWalletClient,
+  http,
+  parseEther,
+  parseUnits,
+  formatEther,
+  erc20Abi,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { TransferRequest, TransferResult } from './transaction.types';
+import { networkConfig } from '../../config/network';
+
 export async function sendEthereum(request: TransferRequest): Promise<TransferResult> {
-  if (request.network !== 'ethereum-sepolia' && request.network !== 'ethereum-mainnet') {
-    throw new Error('Invalid Ethereum network');
+  const network = networkConfig[request.network];
+
+  if (!network) {
+    throw new Error('Invalid EVM-compatible network');
   }
 
   if (!isAddress(request.to)) {
     throw new Error('Invalid Ethereum recipient address');
   }
 
-  const config = NETWORKS[request.network];
-  const rpcUrl = process.env[config.env];
-
-  if (!rpcUrl) {
-    throw new Error(`${config.env} is not configured`);
+  if (!network.rpcUrl) {
+    throw new Error(`${request.network} RPC URL is not configured`);
   }
 
-  const provider = new JsonRpcProvider(rpcUrl);
-  const network = await provider.getNetwork();
+  const account = privateKeyToAccount(request.privateKey as `0x${string}`);
+  const to = request.to as `0x${string}`;
 
-  if (network.chainId !== config.chainId) {
-    throw new Error('RPC endpoint chain ID does not match configuration');
-  }
+  const publicClient = createPublicClient({
+    chain: network.chain,
+    transport: http(network.rpcUrl),
+  });
 
-  const signer = new Wallet(request.privateKey, provider);
+  const walletClient = createWalletClient({
+    chain: network.chain,
+    transport: http(network.rpcUrl),
+    account,
+  });
 
   if (request.assetType === 'native') {
-    const value = parseUnits(request.amount, 18);
-    const balance = await provider.getBalance(signer.address);
-    const fee = await provider.getFeeData();
+    const value = parseEther(request.amount);
+    const [balance, gas, fees] = await Promise.all([
+      publicClient.getBalance({ address: account.address }),
+      publicClient.estimateGas({
+        account: account.address,
+        to,
+        value,
+      }),
+      publicClient.estimateFeesPerGas(),
+    ]);
 
-    if (fee.maxFeePerGas == null && fee.gasPrice == null) {
+    const maxFeePerGas = fees.maxFeePerGas ?? fees.gasPrice;
+
+    if (maxFeePerGas == null) {
       throw new Error('Unable to estimate transaction fees');
     }
 
-    const gasPrice = fee.maxFeePerGas ?? fee.gasPrice!;
-    const gasLimit = 21000n;
+    const estimatedFee = gas * maxFeePerGas;
 
-    if (balance < value + gasLimit * gasPrice) {
-      throw new Error('Insufficient ETH for amount and estimated fee');
+    if (balance < value + estimatedFee) {
+      throw new Error(
+        `Insufficient ETH. Balance: ${formatEther(balance)} ETH; ` +
+          `required amount plus estimated fee: ${formatEther(value + estimatedFee)} ETH`,
+      );
     }
 
-    const tx = await signer.sendTransaction({
-      to: request.to,
+    const hash = await walletClient.sendTransaction({
+      account,
+      to,
       value,
+      chain: network.chain,
     });
 
     return {
       network: request.network,
-      transactionHash: tx.hash,
+      transactionHash: hash,
     };
   }
 
@@ -54,20 +85,69 @@ export async function sendEthereum(request: TransferRequest): Promise<TransferRe
     throw new Error('A valid ERC-20 contract address is required');
   }
 
-  const token = new Contract(request.tokenAddress, ERC20_ABI, signer);
+  const tokenAddress = request.tokenAddress as `0x${string}`;
 
-  const decimals = Number(await token.decimals());
-  const amount = parseUnits(request.amount, decimals);
-  const balance = await token.balanceOf(signer.address);
+  const [decimals, tokenBalance] = await Promise.all([
+    publicClient.readContract({
+      address: tokenAddress,
+      abi: erc20Abi,
+      functionName: 'decimals',
+    }),
+    publicClient.readContract({
+      address: tokenAddress,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [account.address],
+    }),
+  ]);
 
-  if (balance < amount) {
-    throw new Error('Insufficient token balance');
+  const amount = parseUnits(request.amount, Number(decimals));
+
+  if (amount <= 0n) {
+    throw new Error('Amount must be greater than zero');
   }
 
-  const tx = await token.transfer(request.to, amount);
+  if (tokenBalance < amount) {
+    throw new Error('Insufficient ERC-20 token balance');
+  }
+
+  // Simulate the transfer before submitting it.
+  const { request: simulatedRequest } = await publicClient.simulateContract({
+    account,
+    address: tokenAddress,
+    abi: erc20Abi,
+    functionName: 'transfer',
+    args: [to, amount],
+  });
+
+  const [gas, fees, nativeBalance] = await Promise.all([
+    publicClient.estimateContractGas({
+      account,
+      address: tokenAddress,
+      abi: erc20Abi,
+      functionName: 'transfer',
+      args: [to, amount],
+    }),
+    publicClient.estimateFeesPerGas(),
+    publicClient.getBalance({ address: account.address }),
+  ]);
+
+  const maxFeePerGas = fees.maxFeePerGas ?? fees.gasPrice;
+
+  if (maxFeePerGas == null) {
+    throw new Error('Unable to estimate transaction fees');
+  }
+
+  const estimatedFee = gas * maxFeePerGas;
+
+  if (nativeBalance < estimatedFee) {
+    throw new Error(`Insufficient ETH for gas. Estimated fee: ${formatEther(estimatedFee)} ETH`);
+  }
+
+  const hash = await walletClient.writeContract(simulatedRequest);
 
   return {
     network: request.network,
-    transactionHash: tx.hash,
+    transactionHash: hash,
   };
 }

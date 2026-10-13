@@ -106,8 +106,9 @@ export class WalletService {
       message: 'Enter the recipient address:',
     });
 
-    const amount = await input({
+    const amount = await password({
       message: `Enter the amount of ${token.toUpperCase()} to send:`,
+      mask: '*',
     });
 
     const walletPassword = await password({

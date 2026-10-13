@@ -1,6 +1,6 @@
 import { TronWeb } from 'tronweb';
 
-import { env } from '../../config/env';
+import { networkConfig } from '../../config/network';
 import TRC20_ABI from '../../shared/abis/trc20.json';
 
 import { TransferRequest, TransferResult } from './transaction.types';
@@ -22,12 +22,14 @@ function toBaseUnits(amount: string, decimals: number): bigint {
 }
 
 export async function sendTron(request: TransferRequest): Promise<TransferResult> {
-  if (!env.rpcUrls.tron) {
+  const network = networkConfig[request.network];
+
+  if (!network.rpcUrl) {
     throw new Error(`TRON RPC is not configured`);
   }
 
   const tronWeb = new TronWeb({
-    fullHost: env.rpcUrls.tron,
+    fullHost: network.rpcUrl,
     privateKey: request.privateKey,
   });
 

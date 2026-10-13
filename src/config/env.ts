@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+const mode = process.env.NODE_ENV === 'development' ? 'development' : 'production';
+
+dotenv.config({ path: `.env.${mode}` });
 
 export const env = {
   mongoUri: process.env.MONGODB_URI || '',
