@@ -27,7 +27,6 @@ const walletSchema = new Schema(
     encryptedPrivateKey: {
       type: String,
       required: true,
-      select: false,
     },
   },
   {

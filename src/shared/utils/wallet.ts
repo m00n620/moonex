@@ -3,8 +3,9 @@ import { TronWeb } from 'tronweb';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import erc20Abi from '../abis/erc20.json';
-import { GeneratedWallet, WalletNetwork } from '../../services/wallets/wallet.types';
+import { GeneratedWallet } from '../../services/wallets/wallet.types';
 import { Wallet } from '../../services/wallets/wallet.model';
+import { Network } from '../types';
 import { networkConfig } from '../../config/network';
 import { supportedTokensConfig } from '../../config/tokens';
 
@@ -51,26 +52,4 @@ export async function getWalletPortfolio(wallet: Wallet) {
 
     console.log(result);
   }
-}
-
-export async function sendToken(input: {
-  privateKey: string;
-  to: string;
-  amount: string;
-  token: string;
-  network: WalletNetwork;
-}) {
-  const { privateKey, to, amount, token, network } = input;
-
-  console.log(to, amount, token, network);
-
-  const walletClient = createWalletClient({
-    chain: networkConfig[input.network].chain,
-    transport: http(networkConfig[input.network].rpcUrl),
-  });
-
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
-
-  console.log(account);
-  console.log(walletClient);
 }

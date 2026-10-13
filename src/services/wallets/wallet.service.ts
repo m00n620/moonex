@@ -1,8 +1,11 @@
-import { input, password, select } from '@inquirer/prompts';
+import { input, password, select, confirm } from '@inquirer/prompts';
 
 import { WalletRepository } from './wallet.repository';
-import { getWalletPortfolio, sendToken } from '../../shared/utils/wallet';
+import { getWalletPortfolio } from '../../shared/utils/wallet';
 import { decryptPrivateKey } from '../../shared/utils/encryption';
+import { supportedTokensConfig } from '../../config/tokens';
+import { sendTransfer } from '../transactions/transaction.service';
+import { getTransactionUrl } from '../../shared/utils/urls';
 
 export class WalletService {
   constructor(private readonly repository = new WalletRepository()) {}
@@ -57,7 +60,7 @@ export class WalletService {
     }
 
     const walletId = await select({
-      message: 'Select a wallet to fund:',
+      message: 'Select a wallet:',
       choices: wallets.map((wallet) => ({
         name: `${wallet.name}`,
         value: wallet.id,
@@ -92,12 +95,11 @@ export class WalletService {
       return;
     }
 
+    const { network, encryptedPrivateKey } = selectedWallet;
+
     const token = await select({
       message: 'Select a token to send:',
-      choices: [
-        { name: 'USDT', value: 'usdt' },
-        { name: 'USDC', value: 'usdc' },
-      ],
+      choices: supportedTokensConfig[network].map((token) => ({ name: token.symbol, value: token.symbol })),
     });
 
     const recipientAddress = await input({
@@ -113,15 +115,26 @@ export class WalletService {
       mask: '*',
     });
 
-    console.log(selectedWallet);
-    const privateKey = decryptPrivateKey(selectedWallet.encryptedPrivateKey, walletPassword);
+    const confirmed = await confirm({
+      message: `Are you sure you want to send ${amount} ${token} to ${recipientAddress}?`,
+    });
 
-    sendToken({
+    if (!confirmed) {
+      return;
+    }
+
+    const privateKey = decryptPrivateKey(encryptedPrivateKey, walletPassword);
+
+    const result = await sendTransfer({
       privateKey,
       to: recipientAddress,
       amount,
       token,
-      network: selectedWallet.network,
+      network,
     });
+
+    if (result) {
+      console.log(`Transaction Link: ${getTransactionUrl(result.network, result.transactionHash)}`);
+    }
   }
 }

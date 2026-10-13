@@ -1,13 +1,13 @@
-export type WalletNetwork = 'ethereum' | 'tron' | 'base';
+import { Network } from '../../shared/types';
 
 export interface GeneratedWallet {
-  network: WalletNetwork;
+  network: Network;
   address: string;
   privateKey: string;
 }
 
 export interface CreateWalletInput {
   name: string;
-  network: WalletNetwork;
+  network: Network;
   password: string;
 }
