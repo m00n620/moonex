@@ -1,0 +1,25 @@
+{
+  "name": "moon-wallet",
+  "packageManager": "yarn@4.18.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.7.3",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.7",
+    "ethers": "^6.17.0",
+    "tronweb": "^6.5.1",
+    "viem": "^2.57.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
