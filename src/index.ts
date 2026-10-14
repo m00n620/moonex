@@ -28,11 +28,7 @@ connectDatabase().then(async () => {
     } else if (answer === 'send') {
       await wallets.sendTransaction();
     } else if (answer === 'exit') {
-      console.log('Exiting the application.');
       process.exit();
-      break;
-    } else {
-      console.log('Invalid option selected.');
     }
   }
 });

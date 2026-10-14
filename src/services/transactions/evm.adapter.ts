@@ -9,13 +9,13 @@ import {
   erc20Abi,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { TransferRequest, TransferResult } from './transaction.types';
+import type { EvmTransferRequest, TransferResult } from './transaction.types';
 import { networkConfig } from '../../config/network';
 
-export async function sendEthereum(request: TransferRequest): Promise<TransferResult> {
-  const network = networkConfig[request.network];
+export async function sendEvm(request: EvmTransferRequest): Promise<TransferResult> {
+  const network = networkConfig[request.chain];
 
-  if (!network) {
+  if (!network?.chain) {
     throw new Error('Invalid EVM-compatible network');
   }
 
@@ -24,7 +24,7 @@ export async function sendEthereum(request: TransferRequest): Promise<TransferRe
   }
 
   if (!network.rpcUrl) {
-    throw new Error(`${request.network} RPC URL is not configured`);
+    throw new Error(`${request.chain} RPC URL is not configured`);
   }
 
   const account = privateKeyToAccount(request.privateKey as `0x${string}`);
@@ -76,7 +76,7 @@ export async function sendEthereum(request: TransferRequest): Promise<TransferRe
     });
 
     return {
-      network: request.network,
+      chain: request.chain,
       transactionHash: hash,
     };
   }
@@ -147,7 +147,7 @@ export async function sendEthereum(request: TransferRequest): Promise<TransferRe
   const hash = await walletClient.writeContract(simulatedRequest);
 
   return {
-    network: request.network,
+    chain: request.chain,
     transactionHash: hash,
   };
 }

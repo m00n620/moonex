@@ -1,9 +1,9 @@
-import { Network } from '../../shared/types';
+import type { Chain, EvmChain } from '../../shared/types';
 
 export type AssetType = 'native' | 'token';
 
 export interface TransferRequest {
-  network: Network;
+  chain: Chain;
   privateKey: string;
   to: string;
   amount: string;
@@ -11,7 +11,11 @@ export interface TransferRequest {
   tokenAddress?: string;
 }
 
+export interface EvmTransferRequest extends Omit<TransferRequest, 'chain'> {
+  chain: EvmChain;
+}
+
 export interface TransferResult {
-  network: Network;
+  chain: Chain;
   transactionHash: string;
 }

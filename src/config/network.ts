@@ -1,8 +1,8 @@
 import { mainnet, base } from 'viem/chains';
 import { env } from './env';
-import { Network } from '../shared/types';
+import { Chain } from '../shared/types';
 
-export const networkConfig: Record<Network, { chain?: any; rpcUrl: string }> = {
+export const networkConfig: Record<Chain, { chain?: any; rpcUrl: string }> = {
   ethereum: {
     chain: mainnet,
     rpcUrl: env.rpcUrls.ethereum,
@@ -15,3 +15,13 @@ export const networkConfig: Record<Network, { chain?: any; rpcUrl: string }> = {
     rpcUrl: env.rpcUrls.tron,
   },
 };
+
+export const supportedNetworks = [
+  { value: 'evm', name: 'EVM' },
+  { value: 'tron', name: 'Tron' },
+];
+
+export const supportedEvmChains = [
+  { value: 'etherum', name: 'Ethereum' },
+  { value: 'base', name: 'Base' },
+];

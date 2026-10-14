@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { generateEthereumWallet, generateTronWallet } from '../../shared/utils/wallet';
+import { generateEvmWallet, generateTronWallet } from '../../shared/utils/wallet';
 import { encryptPrivateKey } from '../../shared/utils/encryption';
 import { WalletModel } from './wallet.model';
 import { CreateWalletInput, GeneratedWallet } from './wallet.types';
@@ -9,11 +9,11 @@ export class WalletRepository {
     const id = randomUUID();
     const { name, network, password } = input;
 
-    let generatedWallet: GeneratedWallet | null = null;
-    if (network == 'ethereum') {
-      generatedWallet = generateEthereumWallet();
-    } else if (network == 'tron') {
+    let generatedWallet: GeneratedWallet;
+    if (network === 'tron') {
       generatedWallet = await generateTronWallet();
+    } else if (network === 'evm') {
+      generatedWallet = generateEvmWallet();
     } else {
       throw new Error(`Unsupported network: ${network}`);
     }
@@ -27,8 +27,6 @@ export class WalletRepository {
       address: generatedWallet.address,
       encryptedPrivateKey,
     });
-
-    console.log(`Wallet created with ID: ${id}, address: ${generatedWallet.address}, network: ${network}`);
 
     return id;
   }

@@ -22,7 +22,7 @@ function toBaseUnits(amount: string, decimals: number): bigint {
 }
 
 export async function sendTron(request: TransferRequest): Promise<TransferResult> {
-  const network = networkConfig[request.network];
+  const network = networkConfig[request.chain];
 
   if (!network.rpcUrl) {
     throw new Error(`TRON RPC is not configured`);
@@ -71,7 +71,7 @@ export async function sendTron(request: TransferRequest): Promise<TransferResult
     }
 
     return {
-      network: request.network,
+      chain: request.chain,
       transactionHash: result.txid,
     };
   }
@@ -100,7 +100,7 @@ export async function sendTron(request: TransferRequest): Promise<TransferResult
   });
 
   return {
-    network: request.network,
+    chain: request.chain,
     transactionHash: typeof txid === 'string' ? txid : String(txid),
   };
 }

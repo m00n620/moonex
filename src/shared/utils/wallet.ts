@@ -5,13 +5,13 @@ import { GeneratedWallet } from '../../services/wallets/wallet.types';
 import { Wallet } from '../../services/wallets/wallet.model';
 import { networkConfig } from '../../config/network';
 import { supportedTokensConfig } from '../../config/tokens';
+import { Chain, isEvmChain } from '../types';
 
-export function generateEthereumWallet(): GeneratedWallet {
+export function generateEvmWallet(): GeneratedWallet {
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
 
   return {
-    network: 'ethereum',
     address: account.address,
     privateKey,
   };
@@ -21,23 +21,24 @@ export async function generateTronWallet(): Promise<GeneratedWallet> {
   const account = await TronWeb.createAccount();
 
   return {
-    network: 'tron',
     address: account.address.base58,
     privateKey: account.privateKey,
   };
 }
 
-export async function getWalletPortfolio(wallet: Wallet) {
-  if (wallet.network === 'ethereum') {
-    const tokens = supportedTokensConfig.ethereum;
-    const network = networkConfig.ethereum;
+export async function getWalletPortfolio(wallet: Wallet, chain: Chain) {
+  if (isEvmChain(chain)) {
+    const tokens = supportedTokensConfig[chain];
+    const network = networkConfig[chain];
+
     const publicClient = createPublicClient({
       chain: network.chain,
-      transport: http(),
+      transport: http(network.rpcUrl),
     });
 
-    const result = await publicClient.multicall({
-      contracts: tokens.map(
+    const contracts = tokens
+      .filter((token) => !token.isNative)
+      .map(
         (token) =>
           ({
             address: token.address,
@@ -45,8 +46,9 @@ export async function getWalletPortfolio(wallet: Wallet) {
             functionName: 'balanceOf',
             args: [wallet.address],
           }) as any,
-      ),
-    });
+      );
+
+    const result = await publicClient.multicall({ contracts });
 
     console.log(result);
   }

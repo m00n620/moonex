@@ -11,8 +11,6 @@ export async function connectDatabase(): Promise<void> {
   await mongoose.connect(uri, {
     serverSelectionTimeoutMS: 5000,
   });
-
-  console.log('Connected to MongoDB');
 }
 
 export async function disconnectDatabase(): Promise<void> {

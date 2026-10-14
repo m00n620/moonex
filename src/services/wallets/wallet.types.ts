@@ -1,7 +1,6 @@
-import { Network } from '../../shared/types';
+import type { Network } from '../../shared/types';
 
 export interface GeneratedWallet {
-  network: Network;
   address: string;
   privateKey: string;
 }

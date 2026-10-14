@@ -15,7 +15,7 @@ const walletSchema = new Schema(
     },
     network: {
       type: String,
-      enum: ['ethereum', 'tron'],
+      enum: ['evm', 'tron'],
       required: true,
       index: true,
     },

@@ -1,6 +1,7 @@
+import { sendEvm } from './evm.adapter';
 import { sendTron } from './tron.adapter';
 import type { TransferResult } from './transaction.types';
-import { Network } from '../../shared/types';
+import { Chain, isEvmChain } from '../../shared/types';
 import { supportedTokensConfig } from '../../config/tokens';
 
 export async function sendTransfer(input: {
@@ -8,28 +9,27 @@ export async function sendTransfer(input: {
   to: string;
   amount: string;
   token: string;
-  network: Network;
-}): Promise<TransferResult | null> {
-  const { privateKey, to, amount, network } = input;
+  chain: Chain;
+}): Promise<TransferResult> {
+  const { privateKey, to, amount, chain } = input;
 
-  const token = supportedTokensConfig[network].find((token) => token.symbol == input.token);
+  const token = supportedTokensConfig[chain].find((token) => token.symbol == input.token);
 
   if (!token) {
-    throw 'Token not defined';
+    throw new Error(`Token ${input.token} is not configured for ${chain}`);
   }
 
-  if (network === 'tron') {
-    const result = await sendTron({
-      network,
-      privateKey,
-      to,
-      amount,
-      tokenAddress: token.address,
-      assetType: token.isNative ? 'native' : 'token',
-    });
+  const transfer = {
+    privateKey,
+    to,
+    amount,
+    tokenAddress: token.address,
+    assetType: token.isNative ? 'native' : 'token',
+  } as const;
 
-    return result;
+  if (isEvmChain(chain)) {
+    return sendEvm({ ...transfer, chain });
   }
 
-  return null;
+  return sendTron({ ...transfer, chain });
 }
