@@ -9,6 +9,10 @@ export class WalletRepository {
     const id = randomUUID();
     const { name, network, password } = input;
 
+    if (!password.trim()) {
+      throw new Error('Wallet password cannot be empty.');
+    }
+
     let generatedWallet: GeneratedWallet;
     if (network === 'tron') {
       generatedWallet = await generateTronWallet();

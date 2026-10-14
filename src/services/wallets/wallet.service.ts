@@ -20,6 +20,7 @@ export class WalletService {
     const walletPassword = await password({
       message: 'Enter a password for the new wallet:',
       mask: '*',
+      validate: (value) => value.trim().length > 0 || 'Password cannot be empty.',
     });
 
     const network = await select({

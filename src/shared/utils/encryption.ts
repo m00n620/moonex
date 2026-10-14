@@ -11,6 +11,10 @@ export interface EncryptedData {
 }
 
 export function encryptPrivateKey(privateKey: string, password: string) {
+  if (!password.trim()) {
+    throw new Error('Encryption password cannot be empty.');
+  }
+
   const salt = randomBytes(16);
   const iv = randomBytes(12);
 
