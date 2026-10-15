@@ -11,6 +11,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import type { EvmTransferRequest, TransferResult } from './transaction.types';
 import { networkConfig } from '../../config/network';
+import usdtAbi from '../../shared/abis/usdt.json';
 
 export async function sendEvm(request: EvmTransferRequest): Promise<TransferResult> {
   const network = networkConfig[request.chain];
@@ -86,6 +87,7 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
   }
 
   const tokenAddress = request.tokenAddress as `0x${string}`;
+  const tokenSymbol = request.tokenSymbol;
 
   const [decimals, tokenBalance] = await Promise.all([
     publicClient.readContract({
@@ -111,11 +113,13 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
     throw new Error('Insufficient ERC-20 token balance');
   }
 
+  const abi = tokenSymbol == 'USDT' ? usdtAbi : erc20Abi;
+
   // Simulate the transfer before submitting it.
   const { request: simulatedRequest } = await publicClient.simulateContract({
     account,
     address: tokenAddress,
-    abi: erc20Abi,
+    abi,
     functionName: 'transfer',
     args: [to, amount],
   });
@@ -124,7 +128,7 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
     publicClient.estimateContractGas({
       account,
       address: tokenAddress,
-      abi: erc20Abi,
+      abi,
       functionName: 'transfer',
       args: [to, amount],
     }),

@@ -9,6 +9,7 @@ export interface TransferRequest {
   amount: string;
   assetType: AssetType;
   tokenAddress?: string;
+  tokenSymbol?: string;
 }
 
 export interface EvmTransferRequest extends Omit<TransferRequest, 'chain'> {

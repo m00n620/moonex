@@ -24,6 +24,7 @@ export async function sendTransfer(input: {
     to,
     amount,
     tokenAddress: token.address,
+    tokenSymbol: token.symbol,
     assetType: token.isNative ? 'native' : 'token',
   } as const;
 
