@@ -13,6 +13,8 @@ import type { EvmTransferRequest, TransferResult } from './transaction.types';
 import { networkConfig } from '../../config/network';
 import usdtAbi from '../../shared/abis/usdt.json';
 
+const TRANSACTION_TIMEOUT = 120_000; // 2 minutes
+
 export async function sendEvm(request: EvmTransferRequest): Promise<TransferResult> {
   const network = networkConfig[request.chain];
 
@@ -42,6 +44,41 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
     account,
   });
 
+  // Wait for transaction confirmation and validate receipt.
+  const waitForConfirmation = async (hash: `0x${string}`) => {
+    console.log(`[EVM] Transaction submitted: ${hash}`);
+
+    let receipt;
+
+    try {
+      receipt = await publicClient.waitForTransactionReceipt({
+        hash,
+        timeout: TRANSACTION_TIMEOUT,
+        confirmations: 1,
+      });
+    } catch (error) {
+      throw new Error(
+        `Transaction submitted but not confirmed within ${TRANSACTION_TIMEOUT / 1000} seconds. Hash: ${hash}. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (receipt.status !== 'success') {
+      throw new Error(`Transaction execution failed. Hash: ${hash}; ` + `Block: ${receipt.blockNumber}`);
+    }
+
+    console.log('[EVM] Transaction confirmed:', {
+      hash,
+      blockNumber: receipt.blockNumber.toString(),
+      gasUsed: receipt.gasUsed.toString(),
+      status: receipt.status,
+    });
+
+    return receipt;
+  };
+
+  // Native ETH transfer.
   if (request.assetType === 'native') {
     const value = parseEther(request.amount);
     const [balance, gas, fees] = await Promise.all([
@@ -76,12 +113,18 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
       chain: network.chain,
     });
 
+    const receipt = await waitForConfirmation(hash);
+
     return {
       chain: request.chain,
       transactionHash: hash,
+      blockNumber: receipt.blockNumber,
+      gasUsed: receipt.gasUsed,
+      status: receipt.status,
     };
   }
 
+  // ERC-20 transfer.
   if (!request.tokenAddress || !isAddress(request.tokenAddress)) {
     throw new Error('A valid ERC-20 contract address is required');
   }
@@ -113,9 +156,8 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
     throw new Error('Insufficient ERC-20 token balance');
   }
 
-  const abi = tokenSymbol == 'USDT' ? usdtAbi : erc20Abi;
+  const abi = tokenSymbol === 'USDT' ? usdtAbi : erc20Abi;
 
-  // Simulate the transfer before submitting it.
   const { request: simulatedRequest } = await publicClient.simulateContract({
     account,
     address: tokenAddress,
@@ -149,9 +191,13 @@ export async function sendEvm(request: EvmTransferRequest): Promise<TransferResu
   }
 
   const hash = await walletClient.writeContract(simulatedRequest);
+  const receipt = await waitForConfirmation(hash);
 
   return {
     chain: request.chain,
     transactionHash: hash,
+    blockNumber: receipt.blockNumber,
+    gasUsed: receipt.gasUsed,
+    status: receipt.status,
   };
 }

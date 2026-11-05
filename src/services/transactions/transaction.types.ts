@@ -19,4 +19,7 @@ export interface EvmTransferRequest extends Omit<TransferRequest, 'chain'> {
 export interface TransferResult {
   chain: Chain;
   transactionHash: string;
+  blockNumber?: bigint;
+  gasUsed?: bigint;
+  status?: 'success' | 'reverted';
 }
