@@ -13,6 +13,9 @@ export const supportedTokensConfig: Record<
     { symbol: 'ETH', decimals: 18, address: '', isNative: true },
     { symbol: 'USDC', decimals: 6, address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
   ],
+  bsc: [
+    { symbol: 'USDC', decimals: 6, address: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d' },
+  ],
   tron: [
     { symbol: 'TRX', decimals: 6, address: '', isNative: true },
     { symbol: 'USDT', decimals: 6, address: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },

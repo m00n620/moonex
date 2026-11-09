@@ -9,6 +9,7 @@ export const env = {
   rpcUrls: {
     ethereum: process.env.ETHEREUM_RPC_URL || '',
     base: process.env.BASE_RPC_URL || '',
+    bsc: process.env.BSC_RPC_URL || '',
     tron: process.env.TRON_RPC_URL || '',
   },
 };

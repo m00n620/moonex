@@ -7,7 +7,7 @@ import { supportedTokensConfig } from '../../config/tokens';
 import { sendTransfer } from '../transactions/transaction.service';
 import { getTransactionUrl } from '../../shared/utils/urls';
 import type { Chain, Network } from '../../shared/types';
-import { supportedNetworks } from '../../config/network';
+import { supportedEvmChains, supportedNetworks } from '../../config/network';
 
 export class WalletService {
   constructor(private readonly repository = new WalletRepository()) {}
@@ -145,10 +145,7 @@ export class WalletService {
 
     return select({
       message: 'Select a chain:',
-      choices: [
-        { name: 'Ethereum', value: 'ethereum' },
-        { name: 'Base', value: 'base' },
-      ],
+      choices: supportedEvmChains as any,
     });
   }
 }
