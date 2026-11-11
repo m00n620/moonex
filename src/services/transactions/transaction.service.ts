@@ -1,36 +1,34 @@
-import { sendEvm } from './evm.adapter';
-import { sendTron } from './tron.adapter';
-import type { TransferResult } from './transaction.types';
-import { Chain, isEvmChain } from '../../shared/types';
-import { supportedTokensConfig } from '../../config/tokens';
+import { findAsset, type ChainId } from '../../config/chains';
+import { getAdapter, getChainContext, type TransferResult } from '../../networks';
+import { parseAmount } from '../../shared/utils/amount';
 
-export async function sendTransfer(input: {
-  privateKey: string;
+export interface SendTransferInput {
+  chainId: ChainId;
+  assetSymbol: string;
   to: string;
+  /** Human-readable decimal amount, e.g. "12.5". */
   amount: string;
-  token: string;
-  chain: Chain;
-}): Promise<TransferResult> {
-  const { privateKey, to, amount, chain } = input;
+  privateKey: string;
+}
 
-  const token = supportedTokensConfig[chain].find((token) => token.symbol == input.token);
+export async function sendTransfer(input: SendTransferInput): Promise<TransferResult> {
+  const chain = getChainContext(input.chainId);
+  const asset = findAsset(input.chainId, input.assetSymbol);
 
-  if (!token) {
-    throw new Error(`Token ${input.token} is not configured for ${chain}`);
+  if (!asset) {
+    throw new Error(`${input.assetSymbol} is not configured on ${chain.config.name}`);
   }
 
-  const transfer = {
-    privateKey,
-    to,
+  const amount = parseAmount(input.amount, asset.decimals);
+  if (amount <= 0n) {
+    throw new Error('Amount must be greater than zero');
+  }
+
+  return getAdapter(chain.config.network).transfer({
+    chain,
+    asset,
     amount,
-    tokenAddress: token.address,
-    tokenSymbol: token.symbol,
-    assetType: token.isNative ? 'native' : 'token',
-  } as const;
-
-  if (isEvmChain(chain)) {
-    return sendEvm({ ...transfer, chain });
-  }
-
-  return sendTron({ ...transfer, chain });
+    to: input.to.trim(),
+    privateKey: input.privateKey,
+  });
 }

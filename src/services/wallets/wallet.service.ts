@@ -1,38 +1,44 @@
-import { input, password, select, confirm } from '@inquirer/prompts';
-
-import { WalletRepository } from './wallet.repository';
-import { getWalletPortfolio } from '../../shared/utils/wallet';
+import { confirm, input, password, select } from '@inquirer/prompts';
+import { NETWORKS, type Network } from '../../config/chain.types';
+import { getChain, listAssets, listChains, type ChainId } from '../../config/chains';
+import { getAdapter, getChainContext } from '../../networks';
+import { formatAmount, parseAmount } from '../../shared/utils/amount';
 import { decryptPrivateKey } from '../../shared/utils/encryption';
-import { supportedTokensConfig } from '../../config/tokens';
 import { sendTransfer } from '../transactions/transaction.service';
-import { getTransactionUrl } from '../../shared/utils/urls';
-import type { Chain, Network } from '../../shared/types';
-import { supportedEvmChains, supportedNetworks } from '../../config/network';
+import { WalletRepository } from './wallet.repository';
 
 export class WalletService {
   constructor(private readonly repository = new WalletRepository()) {}
 
   async createWallet() {
-    const walletName = await input({
-      message: 'Enter a name for the new wallet:',
+    const name = await input({
+      message: 'Wallet name:',
+      validate: (value) => value.trim().length > 0 || 'Name cannot be empty.',
     });
 
     const walletPassword = await password({
-      message: 'Enter a password for the new wallet:',
+      message: 'Wallet password:',
       mask: '*',
       validate: (value) => value.trim().length > 0 || 'Password cannot be empty.',
     });
 
-    const network = await select({
-      message: 'Select a network:',
-      choices: supportedNetworks,
+    await password({
+      message: 'Confirm password:',
+      mask: '*',
+      validate: (value) => value === walletPassword || 'Passwords do not match.',
     });
 
-    await this.repository.create({
-      name: walletName,
-      password: walletPassword,
-      network: network as Network,
+    const network = await select<Network>({
+      message: 'Select a network:',
+      choices: NETWORKS.map((network) => ({
+        value: network,
+        name: `${getAdapter(network).label} (${listChains(network)
+          .map((id) => getChain(id).name)
+          .join(', ')})`,
+      })),
     });
+
+    await this.repository.create({ name: name.trim(), password: walletPassword, network });
 
     console.log('Wallet created successfully.');
   }
@@ -45,76 +51,88 @@ export class WalletService {
       return;
     }
 
-    console.log('Wallets:');
-    wallets.forEach((wallet) => {
-      console.log(`- ID: ${wallet.id}, Name: ${wallet.name}, Network: ${wallet.network}, Address: ${wallet.address}`);
-    });
+    console.table(
+      wallets.map((wallet) => ({ name: wallet.name, network: wallet.network, address: wallet.address, id: wallet.id })),
+    );
   }
 
   async loadWallet() {
-    const selectedWallet = await this.selectWallet();
+    const wallet = await this.selectWallet();
+    if (!wallet) return;
 
-    if (!selectedWallet) {
-      console.log('Selected wallet not found.');
-      return;
+    const chainId = await this.selectChain(wallet.network);
+    const chain = getChainContext(chainId);
+
+    console.log(`\n${wallet.name} on ${chain.config.name}`);
+    console.log(`Address: ${wallet.address}  (send funds here on ${chain.config.name} only)\n`);
+
+    const balances = await getAdapter(wallet.network).getBalances(chain, wallet.address);
+
+    for (const { asset, balance } of balances) {
+      const shown = typeof balance === 'bigint' ? formatAmount(balance, asset.decimals) : `error: ${balance.error}`;
+      console.log(`  ${asset.symbol.padEnd(8)} ${shown}`);
     }
-
-    const chain = await this.selectChain(selectedWallet.network);
-    console.log(`To fund the wallet, send funds to ${selectedWallet.address} on ${chain}.`);
-
-    await getWalletPortfolio(selectedWallet, chain);
+    console.log();
   }
 
   async sendTransaction() {
-    const selectedWallet = await this.selectWallet();
+    const wallet = await this.selectWallet();
+    if (!wallet) return;
 
-    if (!selectedWallet) {
-      console.log('Selected wallet not found.');
-      return;
-    }
+    const adapter = getAdapter(wallet.network);
+    const chainId = await this.selectChain(wallet.network);
+    const chain = getChain(chainId);
 
-    const { encryptedPrivateKey } = selectedWallet;
-
-    const chain = await this.selectChain(selectedWallet.network);
-
-    const token = await select({
-      message: 'Select a token to send:',
-      choices: supportedTokensConfig[chain].map((token) => ({ name: token.symbol, value: token.symbol })),
+    const asset = await select({
+      message: 'Select an asset to send:',
+      choices: listAssets(chainId).map((asset) => ({ name: asset.symbol, value: asset })),
     });
 
-    const recipientAddress = await input({
-      message: 'Enter the recipient address:',
-    });
+    const to = (
+      await input({
+        message: 'Recipient address:',
+        validate: (value) => adapter.isValidAddress(value.trim()) || `Not a valid ${adapter.label} address.`,
+      })
+    ).trim();
 
-    const amount = await password({
-      message: `Enter the amount of ${token.toUpperCase()} to send:`,
-      mask: '*',
-    });
-
-    const walletPassword = await password({
-      message: 'Enter your wallet password:',
-      mask: '*',
-    });
+    // Masked on purpose: the amount is never echoed to the terminal.
+    const amount = (
+      await password({
+        message: `Amount of ${asset.symbol}:`,
+        mask: '*',
+        validate: (value) => {
+          try {
+            return parseAmount(value, asset.decimals) > 0n || 'Amount must be greater than zero.';
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        },
+      })
+    ).trim();
 
     const confirmed = await confirm({
-      message: `Please confirm this transaction to ${recipientAddress}.`,
+      message: `Send ${asset.symbol} on ${chain.name} to ${to}? This cannot be undone.`,
+      default: false,
     });
 
     if (!confirmed) {
+      console.log('Cancelled.');
       return;
     }
 
-    const privateKey = decryptPrivateKey(encryptedPrivateKey, walletPassword);
+    const walletPassword = await password({ message: 'Wallet password:', mask: '*' });
 
-    const result = await sendTransfer({
-      privateKey,
-      to: recipientAddress,
-      amount,
-      token,
-      chain,
-    });
+    let privateKey: string;
+    try {
+      privateKey = decryptPrivateKey(wallet.encryptedPrivateKey, walletPassword);
+    } catch {
+      console.log('Incorrect password.');
+      return;
+    }
 
-    console.log(`Transaction Link: ${getTransactionUrl(result.chain, result.transactionHash)}`);
+    const result = await sendTransfer({ chainId, assetSymbol: asset.symbol, to, amount, privateKey });
+
+    console.log(`Transaction sent: ${chain.txUrl(result.transactionHash)}`);
   }
 
   private async selectWallet() {
@@ -127,25 +145,27 @@ export class WalletService {
 
     const walletId = await select({
       message: 'Select a wallet:',
-      choices: wallets.map((wallet) => ({
-        name: `${wallet.name}`,
-        value: wallet.id,
-      })),
+      choices: wallets.map((wallet) => ({ name: `${wallet.name} (${wallet.network}) ${wallet.address}`, value: wallet.id })),
     });
 
-    const selectedWallet = wallets.find((wallet) => wallet.id === walletId);
-
-    return selectedWallet;
+    return wallets.find((wallet) => wallet.id === walletId);
   }
 
-  private async selectChain(network?: Network): Promise<Chain> {
-    if (network === 'tron') {
-      return 'tron';
+  /** Chains available to a wallet's network; skips the prompt when there's only one. */
+  private async selectChain(network: Network): Promise<ChainId> {
+    const options = listChains(network);
+
+    if (options.length === 0) {
+      throw new Error(`No chains configured for network "${network}"`);
     }
 
-    return select({
+    if (options.length === 1) {
+      return options[0]!;
+    }
+
+    return select<ChainId>({
       message: 'Select a chain:',
-      choices: supportedEvmChains as any,
+      choices: options.map((id) => ({ name: getChain(id).name, value: id })),
     });
   }
 }

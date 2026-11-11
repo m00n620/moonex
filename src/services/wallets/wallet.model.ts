@@ -1,4 +1,5 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
+import { NETWORKS } from '../../config/chain.types';
 
 const walletSchema = new Schema(
   {
@@ -15,7 +16,7 @@ const walletSchema = new Schema(
     },
     network: {
       type: String,
-      enum: ['evm', 'tron'],
+      enum: NETWORKS,
       required: true,
       index: true,
     },

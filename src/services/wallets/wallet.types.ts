@@ -1,9 +1,4 @@
-import type { Network } from '../../shared/types';
-
-export interface GeneratedWallet {
-  address: string;
-  privateKey: string;
-}
+import type { Network } from '../../config/chain.types';
 
 export interface CreateWalletInput {
   name: string;

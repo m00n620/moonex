@@ -2,14 +2,13 @@ import dotenv from 'dotenv';
 
 const mode = process.env.NODE_ENV === 'development' ? 'development' : 'production';
 
-dotenv.config({ path: `.env.${mode}` });
+dotenv.config({ path: `.env.${mode}`, quiet: true });
+
+export function getEnv(name: string): string {
+  return process.env[name]?.trim() ?? '';
+}
 
 export const env = {
-  mongoUri: process.env.MONGODB_URI || '',
-  rpcUrls: {
-    ethereum: process.env.ETHEREUM_RPC_URL || '',
-    base: process.env.BASE_RPC_URL || '',
-    bsc: process.env.BSC_RPC_URL || '',
-    tron: process.env.TRON_RPC_URL || '',
-  },
+  mode,
+  mongoUri: getEnv('MONGODB_URI'),
 };

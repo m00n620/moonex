@@ -1,40 +1,30 @@
 import { randomUUID } from 'node:crypto';
-import { generateEvmWallet, generateTronWallet } from '../../shared/utils/wallet';
+import { getAdapter } from '../../networks';
 import { encryptPrivateKey } from '../../shared/utils/encryption';
 import { WalletModel } from './wallet.model';
-import { CreateWalletInput, GeneratedWallet } from './wallet.types';
+import type { CreateWalletInput } from './wallet.types';
 
 export class WalletRepository {
-  async create(input: CreateWalletInput): Promise<string> {
-    const id = randomUUID();
-    const { name, network, password } = input;
-
+  async create({ name, network, password }: CreateWalletInput): Promise<string> {
     if (!password.trim()) {
       throw new Error('Wallet password cannot be empty.');
     }
 
-    let generatedWallet: GeneratedWallet;
-    if (network === 'tron') {
-      generatedWallet = await generateTronWallet();
-    } else if (network === 'evm') {
-      generatedWallet = generateEvmWallet();
-    } else {
-      throw new Error(`Unsupported network: ${network}`);
-    }
-
-    const encryptedPrivateKey = encryptPrivateKey(generatedWallet.privateKey, password);
+    const id = randomUUID();
+    const generated = await getAdapter(network).generateWallet();
 
     await WalletModel.create({
       id,
       name,
       network,
-      address: generatedWallet.address,
-      encryptedPrivateKey,
+      address: generated.address,
+      encryptedPrivateKey: encryptPrivateKey(generated.privateKey, password),
     });
 
     return id;
   }
+
   findAll() {
-    return WalletModel.find().lean();
+    return WalletModel.find().sort({ createdAt: 1 }).lean();
   }
 }
