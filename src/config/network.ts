@@ -26,7 +26,7 @@ export const supportedNetworks = [
 ];
 
 export const supportedEvmChains = [
-  { value: 'etherum', name: 'Ethereum' },
+  { value: 'ethereum', name: 'Ethereum' },
   { value: 'base', name: 'Base' },
   { value: 'bsc', name: 'Binance Smart Chain' },
 ];
