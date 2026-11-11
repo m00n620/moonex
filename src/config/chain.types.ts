@@ -26,6 +26,8 @@ export interface NativeCurrency {
 interface BaseChainConfig {
   /** Human-readable chain name. */
   name: string;
+  /** Numeric chain id: the EIP-155 id for EVM chains; TRON mainnet is 728126428 (0x2b6653dc). Used for cross-chain routing. */
+  chainId: number;
   nativeCurrency: NativeCurrency;
   /** Public RPC used when `<CHAIN_ID>_RPC_URL` is not set. */
   defaultRpcUrl: string;

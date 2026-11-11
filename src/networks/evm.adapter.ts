@@ -4,6 +4,8 @@ import {
   erc20Abi,
   http,
   isAddress,
+  isAddressEqual,
+  isHex,
   type Address,
   type Hash,
   type PublicClient,
@@ -34,6 +36,29 @@ const transferAbi = [
     outputs: [],
   },
 ] as const;
+
+/** `approve` with no declared outputs, for the same reason as `transferAbi`. */
+const approveAbi = [
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'value', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+] as const;
+
+function accountFrom(privateKey: string) {
+  return privateKeyToAccount((privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`) as Hash);
+}
+
+/** Parses a hex (`0x…`) or decimal quantity string; empty means zero. */
+function parseQuantity(value: string | undefined): bigint {
+  return value ? BigInt(value) : 0n;
+}
 
 function publicClientFor(chain: ChainContext<EvmChainConfig>): PublicClient {
   return createPublicClient({ chain: chain.config.viemChain, transport: http(chain.rpcUrl) });
@@ -80,6 +105,10 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     return isAddress(address);
   },
 
+  isSameAddress(a, b) {
+    return isAddress(a) && isAddress(b) && isAddressEqual(a, b);
+  },
+
   async getBalances(chain, address) {
     if (!isAddress(address)) {
       throw new Error(`Invalid EVM address: ${address}`);
@@ -121,8 +150,7 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     }
 
     const to = request.to;
-    const privateKey = (request.privateKey.startsWith('0x') ? request.privateKey : `0x${request.privateKey}`) as Hash;
-    const account = privateKeyToAccount(privateKey);
+    const account = accountFrom(request.privateKey);
     const client = publicClientFor(chain);
     const walletClient = createWalletClient({ chain: viemChain, transport: http(chain.rpcUrl), account });
 
@@ -196,5 +224,160 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
       blockNumber: receipt.blockNumber,
       gasUsed: receipt.gasUsed,
     };
+  },
+
+  async approve({ chain, privateKey, asset, spender, amount }) {
+    if (!isAddress(spender)) {
+      throw new Error(`Invalid EVM spender address: ${spender}`);
+    }
+
+    const account = accountFrom(privateKey);
+    const client = publicClientFor(chain);
+    const token = asset.address as Address;
+
+    const allowance = await client.readContract({
+      address: token,
+      abi: erc20Abi,
+      functionName: 'allowance',
+      args: [account.address, spender],
+    });
+    if (allowance >= amount) return false;
+
+    const walletClient = createWalletClient({ chain: chain.config.viemChain, transport: http(chain.rpcUrl), account });
+    const setAllowance = async (value: bigint) => {
+      const { request } = await client.simulateContract({
+        account,
+        address: token,
+        abi: approveAbi,
+        functionName: 'approve',
+        args: [spender, value],
+      });
+      await waitForConfirmation(client, await walletClient.writeContract(request));
+    };
+
+    // Some tokens (notably USDT on Ethereum) refuse to change a non-zero allowance to another non-zero value.
+    if (allowance > 0n) {
+      console.log(`Resetting existing ${asset.symbol} allowance to 0...`);
+      await setAllowance(0n);
+    }
+
+    console.log(`Approving ${asset.symbol} for ${spender}...`);
+    await setAllowance(amount);
+    return true;
+  },
+
+  async estimateFees({ chain, owner, asset, amount, spender, transaction: tx }) {
+    if (!isAddress(owner)) {
+      throw new Error(`Invalid EVM address: ${owner}`);
+    }
+
+    const client = publicClientFor(chain);
+    const [feePerGas, nativeBalance] = await Promise.all([maxFeePerGas(client), client.getBalance({ address: owner })]);
+
+    let approvalTxs = 0;
+    let approvalGas = 0n;
+    if (asset.kind === 'token' && spender && isAddress(spender)) {
+      const token = asset.address as Address;
+      const allowance = await client.readContract({
+        address: token,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [owner, spender],
+      });
+
+      if (allowance < amount) {
+        approvalTxs = allowance > 0n ? 2 : 1; // reset to 0 first, then set
+        approvalGas = await client
+          .estimateContractGas({ account: owner, address: token, abi: approveAbi, functionName: 'approve', args: [spender, amount] })
+          .catch(() => 60_000n);
+      }
+    }
+
+    // Same rule as sendPreparedTransaction: the larger of the router's gas limit and a fresh estimate.
+    // A fresh estimate is only possible when no approval is pending (the call would revert without it).
+    const value = parseQuantity(tx.value);
+    let gas = parseQuantity(tx.gasLimit);
+    if (approvalTxs === 0 && isAddress(tx.to) && isHex(tx.data)) {
+      const estimated = await client.estimateGas({ account: owner, to: tx.to, data: tx.data, value }).catch(() => 0n);
+      if (estimated > gas) gas = estimated;
+    }
+    if (gas === 0n) gas = 500_000n;
+
+    return {
+      approvalFee: approvalGas * BigInt(approvalTxs) * feePerGas,
+      approvalTxs,
+      transactionFee: gas * feePerGas,
+      extraValue: asset.kind === 'native' ? (value > amount ? value - amount : 0n) : value,
+      nativeBalance,
+    };
+  },
+
+  async sendPreparedTransaction({ chain, privateKey, asset, amount, transaction: tx }) {
+    const { viemChain, nativeCurrency } = chain.config;
+
+    if (!isAddress(tx.to)) {
+      throw new Error(`Prepared transaction has an invalid target address: ${tx.to}`);
+    }
+    if (!isHex(tx.data)) {
+      throw new Error('Prepared transaction has invalid calldata');
+    }
+    if (tx.chainId !== undefined && tx.chainId !== viemChain.id) {
+      throw new Error(`Prepared transaction is for chain ${tx.chainId}, not ${chain.config.name} (${viemChain.id})`);
+    }
+
+    const account = accountFrom(privateKey);
+    if (tx.from && (!isAddress(tx.from) || !isAddressEqual(tx.from, account.address))) {
+      throw new Error(`Prepared transaction is for sender ${tx.from}, not ${account.address}`);
+    }
+
+    const to = tx.to;
+    const data = tx.data;
+    const value = parseQuantity(tx.value);
+    const client = publicClientFor(chain);
+    const fmtNative = (v: bigint) => `${formatAmount(v, nativeCurrency.decimals)} ${nativeCurrency.symbol}`;
+
+    if (asset.kind === 'native' && value < amount) {
+      throw new Error('Prepared transaction sends less than the requested amount');
+    }
+
+    const nativeBalance = await client.getBalance({ address: account.address });
+    if (asset.kind === 'native' && nativeBalance < value) {
+      throw new Error(`Insufficient ${nativeCurrency.symbol}. Balance: ${fmtNative(nativeBalance)}`);
+    }
+
+    if (asset.kind === 'token') {
+      const tokenBalance = await client.readContract({
+        address: asset.address as Address,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [account.address],
+      });
+      if (tokenBalance < amount) {
+        throw new Error(`Insufficient ${asset.symbol}. Balance: ${formatAmount(tokenBalance, asset.decimals)} ${asset.symbol}`);
+      }
+    }
+
+    // Gas estimation doubles as a simulation: a call that would revert fails here, before anything is signed.
+    const [estimatedGas, feePerGas] = await Promise.all([
+      client.estimateGas({ account: account.address, to, data, value }),
+      maxFeePerGas(client),
+    ]);
+    const providedGas = parseQuantity(tx.gasLimit);
+    const gas = providedGas > estimatedGas ? providedGas : estimatedGas;
+
+    const estimatedFee = gas * feePerGas;
+    if (nativeBalance < value + estimatedFee) {
+      // `value` may include the amount for native transfers, so only the fee and balance are shown.
+      throw new Error(
+        `Insufficient ${nativeCurrency.symbol} for value plus estimated fee (${fmtNative(estimatedFee)}). ` +
+          `Balance: ${fmtNative(nativeBalance)}`,
+      );
+    }
+
+    const walletClient = createWalletClient({ chain: viemChain, transport: http(chain.rpcUrl), account });
+    const hash = await walletClient.sendTransaction({ account, chain: viemChain, to, data, value, gas });
+    const receipt = await waitForConfirmation(client, hash);
+
+    return { chainId: chain.id, transactionHash: hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed };
   },
 };

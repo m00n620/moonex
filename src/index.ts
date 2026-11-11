@@ -14,6 +14,8 @@ async function main() {
     list: () => wallets.listWallets(),
     load: () => wallets.loadWallet(),
     send: () => wallets.sendTransaction(),
+    bridge: () => wallets.bridgeTransfer(),
+    bridgeStatus: () => wallets.checkBridgeStatus(),
   };
 
   while (true) {
@@ -24,6 +26,8 @@ async function main() {
         { name: 'List all wallets', value: 'list' },
         { name: 'Load wallet (balances)', value: 'load' },
         { name: 'Send transaction', value: 'send' },
+        { name: 'Bridge cross-chain', value: 'bridge' },
+        { name: 'Bridge status', value: 'bridgeStatus' },
         { name: 'Exit', value: 'exit' },
       ],
     });

@@ -27,6 +27,7 @@ export const chains = {
   }),
   tron: tronChain({
     name: 'TRON',
+    chainId: 728_126_428,
     defaultRpcUrl: 'https://api.trongrid.io',
     explorerUrl: 'https://tronscan.org/#/transaction',
     feeLimitSun: 100_000_000, // 100 TRX
@@ -82,6 +83,7 @@ function evmChain(
     network: 'evm',
     viemChain,
     name: options.name ?? viemChain.name,
+    chainId: viemChain.id,
     nativeCurrency: { symbol: viemChain.nativeCurrency.symbol, decimals: viemChain.nativeCurrency.decimals },
     defaultRpcUrl,
     txUrl: (hash) => (explorerUrl ? `${explorerUrl.replace(/\/$/, '')}/tx/${hash}` : hash),
@@ -91,6 +93,7 @@ function evmChain(
 
 function tronChain(options: {
   name: string;
+  chainId: number;
   defaultRpcUrl: string;
   explorerUrl: string;
   feeLimitSun: number;
@@ -99,6 +102,7 @@ function tronChain(options: {
   return {
     network: 'tron',
     name: options.name,
+    chainId: options.chainId,
     nativeCurrency: { symbol: 'TRX', decimals: 6 },
     defaultRpcUrl: options.defaultRpcUrl,
     txUrl: (hash) => `${options.explorerUrl}/${hash}`,
