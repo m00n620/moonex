@@ -1,12 +1,14 @@
 import { select } from '@inquirer/prompts';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { WalletService } from './services/wallets/wallet.service';
+import { isGoBack } from './shared/prompts';
 
 const isPromptExit = (error: unknown) => error instanceof Error && error.name === 'ExitPromptError';
 
 async function main() {
   await connectDatabase();
   console.log('Database connected successfully.');
+  console.log('Tip: press Esc (or pick "← Back") to go back to the previous step.\n');
 
   const wallets = new WalletService();
   const actions = {
@@ -38,6 +40,7 @@ async function main() {
       await actions[answer]();
     } catch (error) {
       if (isPromptExit(error)) throw error;
+      if (isGoBack(error)) continue;
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
