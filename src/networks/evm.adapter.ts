@@ -64,9 +64,47 @@ function publicClientFor(chain: ChainContext<EvmChainConfig>): PublicClient {
   return createPublicClient({ chain: chain.config.viemChain, transport: http(chain.rpcUrl) });
 }
 
-async function maxFeePerGas(client: PublicClient): Promise<bigint> {
+type FeeParams = { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } | { gasPrice: bigint };
+
+/**
+ * Current fee values, plus the per-gas ceiling (`max`) used for balance checks. The params are passed to the
+ * signed transaction so it uses exactly the fees the balance check assumed, and viem doesn't query them again.
+ */
+async function feesPerGas(client: PublicClient): Promise<{ params: FeeParams; max: bigint }> {
   const fees = await client.estimateFeesPerGas().catch(() => undefined);
-  return fees?.maxFeePerGas ?? fees?.gasPrice ?? (await client.getGasPrice());
+  if (fees?.maxFeePerGas !== undefined && fees.maxPriorityFeePerGas !== undefined) {
+    const { maxFeePerGas, maxPriorityFeePerGas } = fees;
+    return { params: { maxFeePerGas, maxPriorityFeePerGas }, max: maxFeePerGas };
+  }
+  const gasPrice = fees?.gasPrice ?? (await client.getGasPrice());
+  return { params: { gasPrice }, max: gasPrice };
+}
+
+type Account = ReturnType<typeof accountFrom>;
+
+function approveCall(account: Address | Account, token: Address, spender: Address, value: bigint) {
+  return { account, address: token, abi: approveAbi, functionName: 'approve', args: [spender, value] } as const;
+}
+
+/**
+ * Whether the allowance must be reset to 0 before approving `amount`, and the approval's gas when it can be
+ * estimated now. Only tokens that refuse to change a non-zero allowance (notably USDT on Ethereum) need the
+ * reset, so the direct approval is simulated first instead of always paying for an extra transaction.
+ */
+async function planApproval(
+  client: PublicClient,
+  owner: Address | Account,
+  token: Address,
+  spender: Address,
+  allowance: bigint,
+  amount: bigint,
+): Promise<{ resetFirst: boolean; gas?: bigint }> {
+  try {
+    return { resetFirst: false, gas: await client.estimateContractGas(approveCall(owner, token, spender, amount)) };
+  } catch (error) {
+    if (allowance === 0n) throw error;
+    return { resetFirst: true };
+  }
 }
 
 async function readTokenDecimals(client: PublicClient, address: Address): Promise<number> {
@@ -159,13 +197,13 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     let hash: Hash;
 
     if (asset.kind === 'native') {
-      const [balance, gas, feePerGas] = await Promise.all([
+      const [balance, gas, fees] = await Promise.all([
         client.getBalance({ address: account.address }),
         client.estimateGas({ account: account.address, to, value: amount }),
-        maxFeePerGas(client),
+        feesPerGas(client),
       ]);
 
-      const estimatedFee = gas * feePerGas;
+      const estimatedFee = gas * fees.max;
       if (balance < amount + estimatedFee) {
         // Don't echo the amount (or amount + fee): amounts are kept off-screen.
         throw new Error(
@@ -174,7 +212,7 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
         );
       }
 
-      hash = await walletClient.sendTransaction({ account, chain: viemChain, to, value: amount });
+      hash = await walletClient.sendTransaction({ account, chain: viemChain, to, value: amount, gas, ...fees.params });
     } else {
       const tokenAddress = asset.address as Address;
 
@@ -198,14 +236,14 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
 
       const call = { account, address: tokenAddress, abi: transferAbi, functionName: 'transfer', args: [to, amount] } as const;
 
-      const { request: simulated } = await client.simulateContract(call);
-      const [gas, feePerGas, nativeBalance] = await Promise.all([
+      // Gas estimation doubles as the simulation: a transfer that would revert fails here, before anything is signed.
+      const [gas, fees, nativeBalance] = await Promise.all([
         client.estimateContractGas(call),
-        maxFeePerGas(client),
+        feesPerGas(client),
         client.getBalance({ address: account.address }),
       ]);
 
-      const estimatedFee = gas * feePerGas;
+      const estimatedFee = gas * fees.max;
       if (nativeBalance < estimatedFee) {
         throw new Error(
           `Insufficient ${nativeCurrency.symbol} for gas. Balance: ${fmtNative(nativeBalance)}; ` +
@@ -213,7 +251,7 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
         );
       }
 
-      hash = await walletClient.writeContract(simulated);
+      hash = await walletClient.writeContract({ ...call, chain: viemChain, gas, ...fees.params });
     }
 
     const receipt = await waitForConfirmation(client, hash);
@@ -243,26 +281,22 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     });
     if (allowance >= amount) return false;
 
-    const walletClient = createWalletClient({ chain: chain.config.viemChain, transport: http(chain.rpcUrl), account });
-    const setAllowance = async (value: bigint) => {
-      const { request } = await client.simulateContract({
-        account,
-        address: token,
-        abi: approveAbi,
-        functionName: 'approve',
-        args: [spender, value],
-      });
-      await waitForConfirmation(client, await walletClient.writeContract(request));
+    const { viemChain } = chain.config;
+    const walletClient = createWalletClient({ chain: viemChain, transport: http(chain.rpcUrl), account });
+    const setAllowance = async (value: bigint, knownGas?: bigint) => {
+      const call = approveCall(account, token, spender, value);
+      const [gas, fees] = await Promise.all([knownGas ?? client.estimateContractGas(call), feesPerGas(client)]);
+      await waitForConfirmation(client, await walletClient.writeContract({ ...call, chain: viemChain, gas, ...fees.params }));
     };
 
-    // Some tokens (notably USDT on Ethereum) refuse to change a non-zero allowance to another non-zero value.
-    if (allowance > 0n) {
+    const plan = await planApproval(client, account, token, spender, allowance, amount);
+    if (plan.resetFirst) {
       console.log(`Resetting existing ${asset.symbol} allowance to 0...`);
       await setAllowance(0n);
     }
 
     console.log(`Approving ${asset.symbol} for ${spender}...`);
-    await setAllowance(amount);
+    await setAllowance(amount, plan.gas);
     return true;
   },
 
@@ -272,7 +306,8 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     }
 
     const client = publicClientFor(chain);
-    const [feePerGas, nativeBalance] = await Promise.all([maxFeePerGas(client), client.getBalance({ address: owner })]);
+    const [fees, nativeBalance] = await Promise.all([feesPerGas(client), client.getBalance({ address: owner })]);
+    const feePerGas = fees.max;
 
     let approvalTxs = 0;
     let approvalGas = 0n;
@@ -286,10 +321,13 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
       });
 
       if (allowance < amount) {
-        approvalTxs = allowance > 0n ? 2 : 1; // reset to 0 first, then set
-        approvalGas = await client
-          .estimateContractGas({ account: owner, address: token, abi: approveAbi, functionName: 'approve', args: [spender, amount] })
-          .catch(() => 60_000n);
+        // Same rule as approve(): reset to 0 first only when the token rejects a direct change.
+        const plan = await planApproval(client, owner, token, spender, allowance, amount).catch(
+          (): { resetFirst: boolean; gas?: bigint } => ({ resetFirst: false }),
+        );
+        approvalTxs = plan.resetFirst ? 2 : 1;
+        approvalGas =
+          plan.gas ?? (await client.estimateContractGas(approveCall(owner, token, spender, 0n)).catch(() => 60_000n));
       }
     }
 
@@ -358,14 +396,14 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     }
 
     // Gas estimation doubles as a simulation: a call that would revert fails here, before anything is signed.
-    const [estimatedGas, feePerGas] = await Promise.all([
+    const [estimatedGas, fees] = await Promise.all([
       client.estimateGas({ account: account.address, to, data, value }),
-      maxFeePerGas(client),
+      feesPerGas(client),
     ]);
     const providedGas = parseQuantity(tx.gasLimit);
     const gas = providedGas > estimatedGas ? providedGas : estimatedGas;
 
-    const estimatedFee = gas * feePerGas;
+    const estimatedFee = gas * fees.max;
     if (nativeBalance < value + estimatedFee) {
       // `value` may include the amount for native transfers, so only the fee and balance are shown.
       throw new Error(
@@ -375,7 +413,7 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
     }
 
     const walletClient = createWalletClient({ chain: viemChain, transport: http(chain.rpcUrl), account });
-    const hash = await walletClient.sendTransaction({ account, chain: viemChain, to, data, value, gas });
+    const hash = await walletClient.sendTransaction({ account, chain: viemChain, to, data, value, gas, ...fees.params });
     const receipt = await waitForConfirmation(client, hash);
 
     return { chainId: chain.id, transactionHash: hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed };

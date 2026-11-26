@@ -111,10 +111,36 @@ async function simulateEnergy(
   return BigInt(simulation.energy_used ?? 0);
 }
 
-/** ABI-encodes `approve(spender, amount)` calldata (hex, no 0x). */
-function approveCalldata(spender: string, amount: bigint): string {
+const TRC20_SELECTORS = { transfer: 'a9059cbb', approve: '095ea7b3' } as const;
+
+/** ABI-encodes `transfer(to, amount)` / `approve(spender, amount)` calldata (hex, no 0x). */
+function trc20Calldata(method: keyof typeof TRC20_SELECTORS, address: string, amount: bigint): string {
   const word = (hex: string) => hex.padStart(64, '0');
-  return `095ea7b3${word(TronWeb.address.toHex(spender).slice(2))}${word(amount.toString(16))}`;
+  return `${TRC20_SELECTORS[method]}${word(TronWeb.address.toHex(toBase58(address)).slice(2))}${word(amount.toString(16))}`;
+}
+
+/**
+ * Simulates a contract call and checks the account can pay the TRX it would burn for energy.
+ * On TRON a reverted or out-of-energy transaction still burns TRX, so this runs before every signed call.
+ */
+async function assertCallAffordable(
+  tronWeb: TronWeb,
+  chain: ChainContext<TronChainConfig>,
+  sender: string,
+  call: { contract_address: string; data: string },
+): Promise<void> {
+  const fmtTrx = (sun: bigint) => `${formatAmount(sun, chain.config.nativeCurrency.decimals)} TRX`;
+  const [burn, balance] = await Promise.all([estimateEnergyBurn(tronWeb, sender, call), tronWeb.trx.getBalance(sender)]);
+  const feeLimit = BigInt(chain.config.feeLimitSun);
+
+  if (burn > feeLimit) {
+    throw new Error(`Estimated energy cost (${fmtTrx(burn)}) exceeds the fee limit (${fmtTrx(feeLimit)}). Nothing was sent.`);
+  }
+  if (BigInt(balance) < burn) {
+    throw new Error(
+      `Insufficient TRX for the estimated energy cost (${fmtTrx(burn)}). Balance: ${fmtTrx(BigInt(balance))}. Nothing was sent.`,
+    );
+  }
 }
 
 /** Polls until the transaction is in a block; throws if it failed or reverted. */
@@ -215,7 +241,8 @@ export const tronAdapter: NetworkAdapter<TronChainConfig> = {
         throw new Error('TRON transaction broadcast failed');
       }
 
-      return { chainId: chain.id, transactionHash: result.txid };
+      const info = await waitForConfirmation(tronWeb, result.txid);
+      return { chainId: chain.id, transactionHash: result.txid, blockNumber: BigInt(info.blockNumber) };
     }
 
     const contract = await tronWeb.contract(TRC20_ABI, asset.address);
@@ -233,9 +260,16 @@ export const tronAdapter: NetworkAdapter<TronChainConfig> = {
       throw new Error(`Insufficient ${asset.symbol}. Balance: ${formatAmount(balance, asset.decimals)} ${asset.symbol}`);
     }
 
-    const txid = await contract.transfer(to, amount.toString()).send({ feeLimit: chain.config.feeLimitSun });
+    // Simulate first: without it, a failing transfer or one the account can't fund still burns TRX.
+    await assertCallAffordable(tronWeb, chain, sender, {
+      contract_address: asset.address,
+      data: trc20Calldata('transfer', to, amount),
+    });
 
-    return { chainId: chain.id, transactionHash: String(txid) };
+    const txid = String(await contract.transfer(to, amount.toString()).send({ feeLimit: chain.config.feeLimitSun }));
+    const info = await waitForConfirmation(tronWeb, txid);
+
+    return { chainId: chain.id, transactionHash: txid, blockNumber: BigInt(info.blockNumber) };
   },
 
   async approve({ chain, privateKey, asset, spender, amount }) {
@@ -254,13 +288,20 @@ export const tronAdapter: NetworkAdapter<TronChainConfig> = {
     const allowance = BigInt(String(await contract.allowance(owner, spenderAddress).call()));
     if (allowance >= amount) return false;
 
+    const approveCall = (value: bigint) => ({
+      contract_address: asset.address,
+      data: trc20Calldata('approve', spenderAddress, value),
+    });
     const setAllowance = async (value: bigint) => {
+      await assertCallAffordable(tronWeb, chain, owner, approveCall(value));
       const txid = await contract.approve(spenderAddress, value.toString()).send({ feeLimit: chain.config.feeLimitSun });
       await waitForConfirmation(tronWeb, String(txid));
     };
 
-    // Same precaution as on EVM: some tokens refuse to change a non-zero allowance to another non-zero value.
-    if (allowance > 0n) {
+    // Same rule as on EVM: reset to 0 first only when the token rejects changing a non-zero allowance directly.
+    const resetFirst =
+      allowance > 0n && !(await simulateEnergy(tronWeb, owner, approveCall(amount)).then(() => true, () => false));
+    if (resetFirst) {
       console.log(`Resetting existing ${asset.symbol} allowance to 0...`);
       await setAllowance(0n);
     }
@@ -297,11 +338,15 @@ export const tronAdapter: NetworkAdapter<TronChainConfig> = {
       const allowance = BigInt(String(await contract.allowance(owner, spenderAddress).call()));
 
       if (allowance < amount) {
-        approvalTxs = allowance > 0n ? 2 : 1; // reset to 0 first, then set
-        const energy = await simulateEnergy(tronWeb, owner, {
-          contract_address: asset.address,
-          data: approveCalldata(spenderAddress, amount),
-        }).catch(() => 35_000n);
+        // Same rule as approve(): reset to 0 first only when the token rejects a direct change.
+        const simulate = (value: bigint) =>
+          simulateEnergy(tronWeb, owner, {
+            contract_address: asset.address,
+            data: trc20Calldata('approve', spenderAddress, value),
+          }).catch(() => undefined);
+        const direct = await simulate(amount);
+        approvalTxs = direct === undefined && allowance > 0n ? 2 : 1;
+        const energy = direct ?? (await simulate(0n)) ?? 35_000n;
         for (let i = 0; i < approvalTxs; i++) approvalFee += burn(energy, APPROVE_TX_BYTES);
       }
     }

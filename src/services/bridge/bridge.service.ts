@@ -139,31 +139,39 @@ export async function executeBridge(confirmed: BridgeQuote, privateKey: string):
   const chain = getChainContext(request.fromChainId);
   const adapter = getAdapter(chain.config.network);
 
-  if (request.fromAsset.kind === 'token' && confirmed.spender) {
-    await adapter.approve({
-      chain,
-      privateKey,
-      asset: request.fromAsset,
-      spender: confirmed.spender,
-      amount: request.amount,
-    });
-  }
+  const refreshIfStale = async (current: BridgeQuote): Promise<BridgeQuote> => {
+    if (Date.now() - current.quotedAt <= QUOTE_MAX_AGE_MS) return current;
 
-  let current = confirmed;
-  if (Date.now() - current.quotedAt > QUOTE_MAX_AGE_MS) {
     console.log('Quote expired; requesting a fresh one...');
-    current = await quoteBridge(request);
+    const fresh = await quoteBridge(request);
 
     const confirmedMin = BigInt(confirmed.quote.estimate.toAmountMin);
-    if (BigInt(current.quote.estimate.toAmount) < confirmedMin) {
+    if (BigInt(fresh.quote.estimate.toAmount) < confirmedMin) {
       throw new Error(
         'The refreshed quote is below the minimum you confirmed, so nothing was bridged. Run the bridge again to review it.',
       );
     }
-    if (current.spender && (!confirmed.spender || !adapter.isSameAddress(current.spender, confirmed.spender))) {
-      throw new Error('The refreshed quote uses a different contract than the one approved, so nothing was bridged. Run the bridge again.');
+    if (fresh.spender && (!confirmed.spender || !adapter.isSameAddress(fresh.spender, confirmed.spender))) {
+      throw new Error('The refreshed quote uses a different contract than the one you confirmed, so nothing was bridged. Run the bridge again.');
     }
+    return fresh;
+  };
+
+  // Refresh before approving too, so a refreshed quote that gets rejected doesn't leave the user paying for an approval.
+  let current = await refreshIfStale(confirmed);
+
+  if (request.fromAsset.kind === 'token' && current.spender) {
+    await adapter.approve({
+      chain,
+      privateKey,
+      asset: request.fromAsset,
+      spender: current.spender,
+      amount: request.amount,
+    });
   }
+
+  // The approval may have taken long enough for the quote to expire.
+  current = await refreshIfStale(current);
 
   const result = await adapter.sendPreparedTransaction({
     chain,
