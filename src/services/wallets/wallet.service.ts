@@ -100,32 +100,44 @@ export class WalletService {
     );
   }
 
+  /** Shows the wallet's balances on every chain of its network at once; one address covers them all. */
   async loadWallet() {
-    let wallet!: Wallet;
-    let chainId!: ChainId;
+    const wallet = await this.selectWallet();
+    if (!wallet) return;
 
-    const completed = await runSteps([
-      async () => {
-        const selected = await this.selectWallet();
-        if (!selected) return false;
-        wallet = selected;
-      },
-      async () => {
-        chainId = await this.selectChain(wallet.network);
-      },
-    ]);
-    if (!completed) return;
+    const chainIds = listChains(wallet.network);
+    const chainNames = chainIds.map((id) => getChain(id).name);
+    const adapter = getAdapter(wallet.network);
 
-    const chain = getChainContext(chainId);
+    console.log(`\n${wallet.name} (${adapter.label})`);
+    console.log(`Address: ${wallet.address}`);
+    console.log(`         same address on ${chainNames.join(', ')}; send funds here on these chains only\n`);
+    console.log('Loading balances...\n');
 
-    console.log(`\n${wallet.name} on ${chain.config.name}`);
-    console.log(`Address: ${wallet.address}  (send funds here on ${chain.config.name} only)\n`);
+    // Chains load in parallel; one failing RPC shows as an error row instead of hiding the rest.
+    const results = await Promise.allSettled(chainIds.map((id) => adapter.getBalances(getChainContext(id), wallet.address)));
 
-    const balances = await getAdapter(wallet.network).getBalances(chain, wallet.address);
+    const rows = results.flatMap((result, i) => {
+      const chain = chainNames[i]!;
+      if (result.status === 'rejected') {
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        return [{ chain, symbol: '', amount: `error: ${reason}` }];
+      }
+      return result.value.map(({ asset, balance }) => ({
+        chain,
+        symbol: asset.symbol,
+        amount: typeof balance === 'bigint' ? formatAmount(balance, asset.decimals) : `error: ${balance.error}`,
+      }));
+    });
 
-    for (const { asset, balance } of balances) {
-      const shown = typeof balance === 'bigint' ? formatAmount(balance, asset.decimals) : `error: ${balance.error}`;
-      console.log(`  ${asset.symbol.padEnd(8)} ${shown}`);
+    const chainWidth = Math.max(...chainNames.map((name) => name.length));
+    const symbolWidth = Math.max(6, ...rows.map((row) => row.symbol.length));
+    let previous = '';
+    for (const row of rows) {
+      const chainCell = row.chain === previous ? '' : row.chain;
+      if (row.chain !== previous && previous) console.log();
+      previous = row.chain;
+      console.log(`  ${chainCell.padEnd(chainWidth)}  ${row.symbol.padEnd(symbolWidth)}  ${row.amount}`);
     }
     console.log();
   }
