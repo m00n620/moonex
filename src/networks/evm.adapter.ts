@@ -6,6 +6,7 @@ import {
   isAddress,
   isAddressEqual,
   isHex,
+  multicall3Abi,
   type Address,
   type Hash,
   type PublicClient,
@@ -60,8 +61,17 @@ function parseQuantity(value: string | undefined): bigint {
   return value ? BigInt(value) : 0n;
 }
 
+/**
+ * Concurrent contract reads are merged into one Multicall3 `eth_call` (`batch.multicall`), and other concurrent
+ * requests (balances, gas and fee estimates) share one JSON-RPC batch over HTTP, so a `Promise.all` of reads
+ * costs one round trip instead of one per call.
+ */
 function publicClientFor(chain: ChainContext<EvmChainConfig>): PublicClient {
-  return createPublicClient({ chain: chain.config.viemChain, transport: http(chain.rpcUrl) });
+  return createPublicClient({
+    chain: chain.config.viemChain,
+    transport: http(chain.rpcUrl, { batch: true }),
+    batch: { multicall: true },
+  });
 }
 
 type FeeParams = { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } | { gasPrice: bigint };
@@ -154,6 +164,29 @@ export const evmAdapter: NetworkAdapter<EvmChainConfig> = {
 
     const client = publicClientFor(chain);
     const assets = listAssets(chain.id);
+
+    // One eth_call for every asset: Multicall3's getEthBalance covers the native coin alongside the tokens' balanceOf.
+    const multicall3 = chain.config.viemChain.contracts?.multicall3?.address;
+    if (multicall3) {
+      const results = await client.multicall({
+        allowFailure: true,
+        contracts: assets.map((asset) =>
+          asset.kind === 'native'
+            ? ({ address: multicall3, abi: multicall3Abi, functionName: 'getEthBalance', args: [address] } as const)
+            : ({ address: asset.address as Address, abi: erc20Abi, functionName: 'balanceOf', args: [address] } as const),
+        ),
+      });
+
+      return results.map(
+        (result, i): AssetBalance => ({
+          asset: assets[i]!,
+          balance:
+            result.status === 'success'
+              ? (result.result as bigint)
+              : { error: String((result.error as { shortMessage?: string })?.shortMessage ?? result.error?.message) },
+        }),
+      );
+    }
 
     const settled = await Promise.allSettled(
       assets.map((asset) =>
