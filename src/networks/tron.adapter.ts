@@ -143,13 +143,26 @@ async function assertCallAffordable(
   }
 }
 
-/** Polls until the transaction is in a block; throws if it failed or reverted. */
+interface TronTransactionInfo {
+  blockNumber?: number;
+  result?: string;
+  resMessage?: string;
+  receipt?: { result?: string };
+}
+
+/**
+ * Polls until the transaction is in a block; throws if it failed or reverted.
+ * Reads the full node, not `trx.getTransactionInfo`: that goes to the solidity node, which only reports a
+ * transaction once it is solidified (~1 min after inclusion), long enough to hit the timeout on a successful send.
+ */
 async function waitForConfirmation(tronWeb: TronWeb, txid: string) {
   console.log(`Transaction submitted: ${txid}`);
   const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const info = await tronWeb.trx.getTransactionInfo(txid).catch(() => undefined);
+    const info = await tronWeb.fullNode
+      .request<TronTransactionInfo>('wallet/gettransactioninfobyid', { value: txid }, 'post')
+      .catch(() => undefined);
 
     if (info?.blockNumber) {
       const receiptResult = info.receipt?.result;
@@ -158,7 +171,7 @@ async function waitForConfirmation(tronWeb: TronWeb, txid: string) {
           `TRON transaction failed (${receiptResult ?? info.result}) ${decodeMessage(info.resMessage)}. Hash: ${txid}`.trim(),
         );
       }
-      return info;
+      return { ...info, blockNumber: info.blockNumber };
     }
 
     await delay(CONFIRMATION_POLL_MS);
